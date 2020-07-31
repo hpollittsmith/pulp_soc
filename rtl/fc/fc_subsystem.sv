@@ -32,6 +32,10 @@ module fc_subsystem #(
     XBAR_TCDM_BUS.Master              l2_data_master,
     XBAR_TCDM_BUS.Master              l2_instr_master,
     XBAR_TCDM_BUS.Master              l2_hwpe_master [NB_HWPE_PORTS-1:0],
+`ifdef QUENTIN_SCM
+    UNICAD_MEM_BUS_32.Master          scm_l2_data_master,
+    UNICAD_MEM_BUS_32.Master          scm_l2_instr_master,
+`endif
     APB_BUS.Slave                     apb_slave_eu,
     APB_BUS.Slave                     apb_slave_hwpe,
 
@@ -52,13 +56,17 @@ module fc_subsystem #(
     localparam IBEX_RV32M = CORE_TYPE == 1;
     localparam IBEX_RV32E = CORE_TYPE == 2;
 
+
     // Interrupt signals
     logic        core_irq_req   ;
     logic        core_irq_sec   ;
     logic [4:0]  core_irq_id    ;
     logic [4:0]  core_irq_ack_id;
     logic        core_irq_ack   ;
+    logic [14:0] core_irq_fast  ;
     logic [31:0] core_irq_x;
+
+    logic [3:0]  irq_ack_id;
 
     // Boot address, core id, cluster id, fethc enable and core_status
     logic [31:0] boot_addr        ;
@@ -66,6 +74,10 @@ module fc_subsystem #(
     logic        core_busy_int    ;
     logic        perf_counters_int;
     logic [31:0] hart_id;
+    
+    logic [31:0] dm_halt_addr; //added for cv32e40p
+    logic [31:0] dm_exception_addr;  //added for cv32e40p
+    logic [31:0] mtvec_addr; //added for cv32e40p
 
     //EU signals
     logic core_clock_en;
@@ -85,7 +97,10 @@ module fc_subsystem #(
     assign perf_counters_int = 1'b0;
     assign fetch_en_int      = fetch_en_eu & fetch_en_i;
 
-    assign hart_id = {21'b0, CLUSTER_ID[5:0], 1'b0, CORE_ID[3:0]};
+    assign hart_id = {21'b0, CLUSTER_ID[5:0], 1'b0, CORE_ID[3:0]}; //hart_id = 992
+    assign mtvec_addr = 32'h0 ; //added for cv32e40p; reset value = 0x00000001
+    assign dm_halt_addr = 32'h1A110800 ; //added for cv32e40p
+    assign dm_exception_addr = 32'h1A118080 ; //added for cv32e40p; value taken from IBEX
 
     XBAR_TCDM_BUS core_data_bus ();
     XBAR_TCDM_BUS core_instr_bus ();
@@ -93,6 +108,50 @@ module fc_subsystem #(
     //********************************************************
     //************ CORE DEMUX (TCDM vs L2) *******************
     //********************************************************
+`ifdef QUENTIN_SCM
+    assign is_scm_instr_req = (core_instr_addr < `SOC_L2_PRI_CH0_SCM_END_ADDR) && (core_instr_addr >= `SOC_L2_PRI_CH0_SCM_START_ADDR) || (core_instr_addr < `ALIAS_SOC_L2_PRI_CH0_SCM_END_ADDR) && (core_instr_addr >= `ALIAS_SOC_L2_PRI_CH0_SCM_START_ADDR);
+
+    fc_demux fc_demux_instr_i (
+        .clk          ( clk_i               ),
+        .rst_n        ( rst_ni              ),
+        .port_sel_i   ( is_scm_instr_req    ),
+        .slave_port   ( core_instr_bus      ),
+        .master_port0 ( l2_instr_master     ),
+        .master_port1 ( scm_l2_instr_master )
+    );
+
+    assign core_instr_bus.req   = core_instr_req;
+    assign core_instr_bus.add   = core_instr_addr;
+    assign core_instr_bus.wen   = ~1'b0;
+    assign core_instr_bus.wdata = '0;
+    assign core_instr_bus.be    = 4'b1111;
+    assign core_instr_gnt       = core_instr_bus.gnt;
+    assign core_instr_rvalid    = core_instr_bus.r_valid;
+    assign core_instr_rdata     = core_instr_bus.r_rdata;
+    assign core_instr_err       = 1'b0;
+
+    assign is_scm_data_req = (core_data_addr < `SOC_L2_PRI_CH0_SCM_END_ADDR) && (core_data_addr >= `SOC_L2_PRI_CH0_SCM_START_ADDR) || (core_data_addr < `ALIAS_SOC_L2_PRI_CH0_SCM_END_ADDR) && (core_data_addr >= `ALIAS_SOC_L2_PRI_CH0_SCM_START_ADDR);
+
+    fc_demux fc_demux_data_i (
+        .clk          ( clk_i              ),
+        .rst_n        ( rst_ni             ),
+        .port_sel_i   ( is_scm_data_req    ),
+        .slave_port   ( core_data_bus      ),
+        .master_port0 ( l2_data_master     ),
+        .master_port1 ( scm_l2_data_master )
+    );
+
+    assign core_data_bus.req   = core_data_req;
+    assign core_data_bus.add   = core_data_addr;
+    assign core_data_bus.wen   = ~core_data_we;
+    assign core_data_bus.wdata = core_data_wdata;
+    assign core_data_bus.be    = core_data_be;
+    assign core_data_gnt       = core_data_bus.gnt;
+    assign core_data_rvalid    = core_data_bus.r_valid;
+    assign core_data_rdata     = core_data_bus.r_rdata;
+    assign core_data_err       = 1'b0;
+`else
+
     assign l2_data_master.req    = core_data_req;
     assign l2_data_master.add    = core_data_addr;
     assign l2_data_master.wen    = ~core_data_we;
@@ -114,74 +173,82 @@ module fc_subsystem #(
     assign core_instr_rdata      = l2_instr_master.r_rdata;
     assign core_instr_err        = l2_instr_master.r_opc;
 
+
+`endif
+
     //********************************************************
     //************ RISCV CORE ********************************
     //********************************************************
     generate
     if ( USE_IBEX == 0) begin: FC_CORE
     assign boot_addr = boot_addr_i;
-    riscv_core #(
-        .N_EXT_PERF_COUNTERS ( N_EXT_PERF_COUNTERS ),
-        .PULP_SECURE         ( 1                   ),
-        .PULP_CLUSTER        ( 0                   ),
-        .FPU                 ( USE_FPU             ),
-        .FP_DIVSQRT          ( USE_FPU             ),
-        .SHARED_FP           ( 0                   ),
-        .SHARED_FP_DIVSQRT   ( 2                   )
+    cv32e40p_core #(
+	.PULP_XPULP	( 1	), //not in riscy         
+	.PULP_ZFINX	( 0	), //not in riscy
+	.NUM_MHPMCOUNTERS	( 1	), //not in riscy
+//	.N_EXT_PERF_COUNTERS ( N_EXT_PERF_COUNTERS ), //not used in cv32 (=NUM_MHPMCOUNTERS?)
+//        .PULP_SECURE         ( 1                   ), //not used in cv32
+        .PULP_CLUSTER        ( 0                   ), //riscy=cv32
+        .FPU                 ( 0             ) //riscy=cv32
+//        .FP_DIVSQRT          ( USE_FPU             ), //not used in cv32
+//        .SHARED_FP           ( 0                   ), //not used in cv32
+//        .SHARED_FP_DIVSQRT   ( 2                   ) //not used in cv32
     ) lFC_CORE (
-        .clk_i                 ( clk_i             ),
-        .rst_ni                ( rst_ni            ),
-        .clock_en_i            ( core_clock_en     ),
-        .test_en_i             ( test_en_i         ),
-        .boot_addr_i           ( boot_addr         ),
-        .core_id_i             ( CORE_ID           ),
-        .cluster_id_i          ( CLUSTER_ID        ),
+        .clk_i                 ( clk_i             ), //riscy=cv32
+        .rst_ni                ( rst_ni            ),//riscy=cv32
+        .pulp_clock_en_i            ( core_clock_en     ), //clock_en_i in riscy
+        .scan_cg_en_i             ( test_en_i         ), //test_en_i in riscy
+        .boot_addr_i           ( boot_addr         ), //riscy=cv32
+        .hart_id_i             ( hart_id           ), // not in ricsy; in IBEX
+	.dm_halt_addr_i		( dm_halt_addr	), //not in riscy
+	.dm_exception_addr_i	( dm_exception_addr  ), //not in riscy
+	.mtvec_addr_i		( mtvec_addr	  ), //not in riscy; not in cv32 instantiation
 
         // Instruction Memory Interface:  Interface to Instruction Logaritmic interconnect: Req->grant handshake
-        .instr_addr_o          ( core_instr_addr   ),
-        .instr_req_o           ( core_instr_req    ),
-        .instr_rdata_i         ( core_instr_rdata  ),
-        .instr_gnt_i           ( core_instr_gnt    ),
-        .instr_rvalid_i        ( core_instr_rvalid ),
+        .instr_addr_o          ( core_instr_addr   ), //riscy=cv32
+        .instr_req_o           ( core_instr_req    ), //riscy=cv32
+        .instr_rdata_i         ( core_instr_rdata  ), //riscy=cv32
+        .instr_gnt_i           ( core_instr_gnt    ), //riscy=cv32
+        .instr_rvalid_i        ( core_instr_rvalid ), //riscy=cv32
 
         // Data memory interface:
-        .data_addr_o           ( core_data_addr    ),
-        .data_req_o            ( core_data_req     ),
-        .data_be_o             ( core_data_be      ),
-        .data_rdata_i          ( core_data_rdata   ),
-        .data_we_o             ( core_data_we      ),
-        .data_gnt_i            ( core_data_gnt     ),
-        .data_wdata_o          ( core_data_wdata   ),
-        .data_rvalid_i         ( core_data_rvalid  ),
+        .data_addr_o           ( core_data_addr    ), //riscy=cv32
+        .data_req_o            ( core_data_req     ), //riscy=cv32
+        .data_be_o             ( core_data_be      ), //riscy=cv32
+        .data_rdata_i          ( core_data_rdata   ), //riscy=cv32
+        .data_we_o             ( core_data_we      ), //riscy=cv32
+        .data_gnt_i            ( core_data_gnt     ), //riscy=cv32
+        .data_wdata_o          ( core_data_wdata   ), //riscy=cv32
+        .data_rvalid_i         ( core_data_rvalid  ), //riscy=cv32
 
         // apu-interconnect
         // handshake signals
-        .apu_master_req_o      (                   ),
-        .apu_master_ready_o    (                   ),
-        .apu_master_gnt_i      ( 1'b1              ),
+        .apu_master_req_o      (                   ), //riscy=cv32
+        .apu_master_ready_o    (                   ), //riscy=cv32
+        .apu_master_gnt_i      ( 1'b1              ), //riscy=cv32
         // request channel
-        .apu_master_operands_o (                   ),
-        .apu_master_op_o       (                   ),
-        .apu_master_type_o     (                   ),
-        .apu_master_flags_o    (                   ),
+        .apu_master_operands_o (                   ), //riscy=cv32
+        .apu_master_op_o       (                   ), //riscy=cv32
+        .apu_master_type_o     (                   ), //riscy=cv32
+        .apu_master_flags_o    (                   ), //riscy=cv32
         // response channel
-        .apu_master_valid_i    ( '0                ),
-        .apu_master_result_i   ( '0                ),
-        .apu_master_flags_i    ( '0                ),
+        .apu_master_valid_i    ( '0                ), //riscy=cv32
+        .apu_master_result_i   ( '0                ), //riscy=cv32
+        .apu_master_flags_i    ( '0                ), //riscy=cv32
 
-        .irq_i                 ( core_irq_req      ),
-        .irq_id_i              ( core_irq_id       ),
-        .irq_ack_o             ( core_irq_ack      ),
-        .irq_id_o              ( core_irq_ack_id   ),
-        .irq_sec_i             ( 1'b0              ),
-        .sec_lvl_o             (                   ),
+        .irq_i                 ( core_irq_x     ), //riscy=cv32 = [31:0] events_i?
+ //       .irq_id_i              ( core_irq_id       ), //riscy=cv32
+        .irq_ack_o             ( core_irq_ack      ), //riscy=cv32
+        .irq_id_o              ( core_irq_ack_id   ), //not in cv32
+ //       .irq_sec_i             ( 1'b0              ), //not in cv32
+ //       .sec_lvl_o             (                   ), //not in cv32
 
-        .debug_req_i           ( debug_req_i       ),
+        .debug_req_i           ( debug_req_i       ), //riscy=cv32
 
-        .fetch_enable_i        ( fetch_en_int      ),
-        .core_busy_o           (                   ),
-        .ext_perf_counters_i   ( perf_counters_int ),
-        .fregfile_disable_i    ( 1'b0              ) // try me!
+        .fetch_enable_i        ( fetch_en_int      ), //riscy=cv32
+        .core_sleep_o           (                  ) //core_busy_o in riscy?
+ //       .ext_perf_counters_i   ( perf_counters_int ), //not in cv32
+ //       .fregfile_disable_i    ( 1'b0              ) // try me! not in cv32
     );
     end else begin: FC_CORE
     assign boot_addr = boot_addr_i & 32'hFFFFFF00; // RI5CY expects 0x80 offset, Ibex expects 0x00 offset (adds reset offset 0x80 internally)
@@ -192,20 +259,13 @@ module fc_subsystem #(
 `else
     ibex_core #(
 `endif
-        .PMPEnable                ( 1'b0         ),
-        .MHPMCounterNum           ( 10           ),
-        .MHPMCounterWidth         ( 40           ),
-        .RV32E                    ( IBEX_RV32E   ),
-        .RV32M                    ( IBEX_RV32M   ),
-        .RV32B                    ( 1'b0         ),
-        .BranchTargetALU          ( 1'b0         ),
-        .WritebackStage           ( 1'b0         ),
-        .MultiplierImplementation ( "fast"       ),
-        .ICache                   ( 1'b0         ),
-        .DbgTriggerEn             ( 1'b1         ),
-        .SecureIbex               ( 1'b0         ),
-        .DmHaltAddr               ( 32'h1A110800 ),
-        .DmExceptionAddr          ( 32'h1A110808 )
+        .PMPEnable           ( 0            ),
+        .MHPMCounterNum      ( 8            ),
+        .MHPMCounterWidth    ( 40           ),
+        .RV32E               ( IBEX_RV32E   ),
+        .RV32M               ( IBEX_RV32M   ),
+        .DmHaltAddr          ( 32'h1A110800 ),
+        .DmExceptionAddr     ( 32'h1A110808 )
     ) lFC_CORE (
         .clk_i                 ( clk_i             ),
         .rst_ni                ( rst_ni            ),
@@ -237,12 +297,11 @@ module fc_subsystem #(
         .irq_software_i        ( 1'b0              ),
         .irq_timer_i           ( 1'b0              ),
         .irq_external_i        ( 1'b0              ),
-        .irq_fast_i            ( 15'b0             ),
+        .irq_fast_i            ( core_irq_fast     ),
         .irq_nm_i              ( 1'b0              ),
 
-        .irq_x_i               ( core_irq_x        ),
-        .irq_x_ack_o           ( core_irq_ack      ),
-        .irq_x_ack_id_o        ( core_irq_ack_id   ),
+        .irq_ack_o             ( core_irq_ack      ),
+        .irq_ack_id_o          ( irq_ack_id        ),
 
         .debug_req_i           ( debug_req_i       ),
 
@@ -256,7 +315,34 @@ module fc_subsystem #(
 
     generate
     if ( USE_IBEX == 1) begin : convert_irqs
-    // Ibex supports 32 additional fast interrupts and reads the interrupt lines directly.
+    // Ibex supports 15 fast interrupts and reads the interrupt lines directly
+    // Convert ID back to interrupt lines
+    always_comb begin : gen_core_irq_fast
+        core_irq_fast = '0;
+        if (core_irq_req && (core_irq_id == 26)) begin
+            // remap SoC Event FIFO
+            core_irq_fast[10] = 1'b1;
+        end else if (core_irq_req && (core_irq_id < 15)) begin
+            core_irq_fast[core_irq_id] = 1'b1;
+        end
+    end
+
+    // remap ack ID for SoC Event FIFO
+    always_comb begin : gen_core_irq_ack_id
+        if (irq_ack_id == 10) begin
+            core_irq_ack_id = 26;
+        end else begin
+            core_irq_ack_id = {1'b0, irq_ack_id};
+        end
+    end
+
+    end
+    endgenerate
+
+
+    generate
+    if ( USE_IBEX == 0) begin : convert_irqs
+    // CV32E40P supports 32 fast interrupts and reads the interrupt lines directly
     // Convert ID back to interrupt lines
     always_comb begin : gen_core_irq_x
         core_irq_x = '0;
@@ -308,7 +394,7 @@ module fc_subsystem #(
         assign apb_slave_hwpe.prdata  = '0;
         assign apb_slave_hwpe.pready  = '0;
         assign apb_slave_hwpe.pslverr = '0;
-        for(genvar ii=0; ii<NB_HWPE_PORTS; ii++) begin : no_fc_hwpe_gen_loop
+        for(genvar ii=0; ii<NB_HWPE_PORTS; ii++) begin
             assign l2_hwpe_master[ii].req   = '0;
             assign l2_hwpe_master[ii].wen   = '0;
             assign l2_hwpe_master[ii].wdata = '0;
