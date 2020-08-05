@@ -202,7 +202,7 @@ module fc_subsystem #(
         .hart_id_i             ( hart_id           ), // not in ricsy; in IBEX
 	    .dm_halt_addr_i		( dm_halt_addr	), //not in riscy
 	    .dm_exception_addr_i	( dm_exception_addr  ), //not in riscy
-	    .mtvec_addr_i		( mtvec_addr	  ), //not in riscy; not in cv32 instantiation
+	    .mtvec_addr_i		( mtvec_addr	  ), //not in riscy
 
         // Instruction Memory Interface:  Interface to Instruction Logaritmic interconnect: Req->grant handshake
         .instr_addr_o          ( core_instr_addr   ), //riscy=cv32
