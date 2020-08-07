@@ -98,7 +98,7 @@ module fc_subsystem #(
     assign fetch_en_int      = fetch_en_eu & fetch_en_i;
 
     assign hart_id = {21'b0, CLUSTER_ID[5:0], 1'b0, CORE_ID[3:0]}; //hart_id = 992
-    assign mtvec_addr = 32'h00000001 ; //added for cv32e40p; reset value = 0x00000001
+    assign mtvec_addr = 32'h00000000 ; //added for cv32e40p
     assign dm_halt_addr = 32'h1A110800 ; //added for cv32e40p
     assign dm_exception_addr = 32'h1A118080 ; //added for cv32e40p; value taken from IBEX
 
