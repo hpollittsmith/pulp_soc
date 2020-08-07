@@ -98,9 +98,9 @@ module fc_subsystem #(
     assign fetch_en_int      = fetch_en_eu & fetch_en_i;
 
     assign hart_id = {21'b0, CLUSTER_ID[5:0], 1'b0, CORE_ID[3:0]}; //hart_id = 992
-    assign mtvec_addr = 32'h0 ; //added for cv32e40p
+    assign mtvec_addr = 32'h00000001 ; //added for cv32e40p; reset value = 0x00000001
     assign dm_halt_addr = 32'h1A110800 ; //added for cv32e40p
-    assign dm_exception_addr = 32'h1A118080 ; //added for cv32e40p; value taken from IBEX?
+    assign dm_exception_addr = 32'h1A118080 ; //added for cv32e40p; value taken from IBEX
 
     XBAR_TCDM_BUS core_data_bus ();
     XBAR_TCDM_BUS core_instr_bus ();
@@ -200,9 +200,9 @@ module fc_subsystem #(
         .scan_cg_en_i             ( test_en_i         ), //test_en_i in riscy
         .boot_addr_i           ( boot_addr         ), //riscy=cv32
         .hart_id_i             ( hart_id           ), // not in ricsy; in IBEX
-	    .dm_halt_addr_i		( dm_halt_addr	), //not in riscy
-	    .dm_exception_addr_i	( dm_exception_addr  ), //not in riscy
-	    .mtvec_addr_i		( mtvec_addr	  ), //not in riscy
+	.dm_halt_addr_i		( dm_halt_addr	), //not in riscy
+	.dm_exception_addr_i	( dm_exception_addr  ), //not in riscy
+	.mtvec_addr_i		( mtvec_addr	  ), //not in riscy; not in cv32 instantiation
 
         // Instruction Memory Interface:  Interface to Instruction Logaritmic interconnect: Req->grant handshake
         .instr_addr_o          ( core_instr_addr   ), //riscy=cv32
@@ -236,7 +236,7 @@ module fc_subsystem #(
         .apu_master_result_i   ( '0                ), //riscy=cv32
         .apu_master_flags_i    ( '0                ), //riscy=cv32
 
-        .irq_i                 ( core_irq_x     ), //riscy=cv32 = [31:0]
+        .irq_i                 ( events_i     ), //riscy=cv32 = [31:0] events_i?
  //       .irq_id_i              ( core_irq_id       ), //riscy=cv32
         .irq_ack_o             ( core_irq_ack      ), //riscy=cv32
         .irq_id_o              ( core_irq_ack_id   ), //not in cv32
@@ -246,7 +246,7 @@ module fc_subsystem #(
         .debug_req_i           ( debug_req_i       ), //riscy=cv32
 
         .fetch_enable_i        ( fetch_en_int      ), //riscy=cv32
-        .core_sleep_o           (                  ) //not in riscy
+        .core_sleep_o           (                  ) //core_busy_o in riscy?
  //       .ext_perf_counters_i   ( perf_counters_int ), //not in cv32
  //       .fregfile_disable_i    ( 1'b0              ) // try me! not in cv32
     );
@@ -340,19 +340,19 @@ module fc_subsystem #(
     endgenerate
 
 
-    generate
-    if ( USE_IBEX == 0) begin : convert_irqs
+    //generate
+    //if ( USE_IBEX == 0) begin : convert_irqs
     // CV32E40P supports 32 fast interrupts and reads the interrupt lines directly
     // Convert ID back to interrupt lines
-    always_comb begin : gen_core_irq_x
-        core_irq_x = '0;
-        if (core_irq_req) begin
-            core_irq_x[core_irq_id] = 1'b1;
-        end
-    end
+    //always_comb begin : gen_core_irq_x
+    //    core_irq_x = '0;
+    //    if (core_irq_req) begin
+    //        core_irq_x[core_irq_id] = 1'b1;
+    //    end
+   // end
 
-    end
-    endgenerate
+   // end
+   // endgenerate
 
     apb_interrupt_cntrl #(.PER_ID_WIDTH(PER_ID_WIDTH)) fc_eu_i (
         .clk_i              ( clk_i              ),
